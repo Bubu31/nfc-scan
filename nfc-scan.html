@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner NFC → liste d'URL</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; max-width: 560px; margin-inline: auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 12px; }
+  button { font-size: 1rem; padding: 14px 16px; border-radius: 10px; border: 0; cursor: pointer; }
+  .main { width: 100%; background: #2563eb; color: #fff; font-weight: 600; }
+  .main.on { background: #16a34a; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row button { flex: 1; background: #e5e7eb; color: #111; }
+  #status { margin: 12px 0; padding: 10px; border-radius: 8px; background: #f3f4f6; color: #111; font-size: .95rem; }
+  #status.err { background: #fee2e2; color: #7f1d1d; }
+  #status.ok { background: #dcfce7; color: #14532d; }
+  textarea { width: 100%; box-sizing: border-box; height: 40vh; margin-top: 10px; font-family: ui-monospace, monospace; font-size: .85rem; padding: 8px; border-radius: 8px; }
+  .count { font-weight: 600; margin-top: 12px; }
+</style>
+</head>
+<body>
+<h1>Scanner NFC → liste d'URL</h1>
+<button id="start" class="main">Démarrer le scan</button>
+<div id="status">Prêt. Appuie sur « Démarrer » puis passe les cartes une par une.</div>
+<div class="count"><span id="n">0</span> carte(s)</div>
+<textarea id="out" readonly placeholder="Les URL apparaîtront ici, une par ligne"></textarea>
+<div class="row">
+  <button id="copy">Tout copier</button>
+  <button id="clear">Vider</button>
+</div>
+
+<script>
+(function () {
+  var startBtn = document.getElementById('start');
+  var statusEl = document.getElementById('status');
+  var out = document.getElementById('out');
+  var nEl = document.getElementById('n');
+  var items = [];
+  var seen = {};
+  var reader = null;
+  var ctrl = null;
+
+  function setStatus(msg, cls) { statusEl.textContent = msg; statusEl.className = cls || ''; }
+  function render() { out.value = items.join('\n'); nEl.textContent = items.length; out.scrollTop = out.scrollHeight; }
+  function beep() { try { if (navigator.vibrate) navigator.vibrate(80); } catch (e) {} }
+
+  function decode(rec) {
+    try {
+      var dec = new TextDecoder(rec.encoding || 'utf-8');
+      var txt = dec.decode(rec.data);
+      if (rec.recordType === 'url' || rec.recordType === 'absolute-url' || rec.recordType === 'text') return txt;
+      if (rec.recordType === 'mime' || rec.recordType === 'unknown') return txt;
+    } catch (e) {}
+    return null;
+  }
+
+  if (!('NDEFReader' in window)) {
+    setStatus("Web NFC indisponible. Ouvre cette page dans Chrome sur un téléphone Android (pas iPhone, pas ordinateur).", 'err');
+    startBtn.disabled = true;
+  }
+
+  startBtn.addEventListener('click', async function () {
+    if (ctrl) { ctrl.abort(); ctrl = null; startBtn.textContent = 'Démarrer le scan'; startBtn.classList.remove('on'); setStatus('Scan arrêté.'); return; }
+    try {
+      reader = new NDEFReader();
+      ctrl = new AbortController();
+      await reader.scan({ signal: ctrl.signal });
+      startBtn.textContent = 'Scan en cours… (appuie pour arrêter)';
+      startBtn.classList.add('on');
+      setStatus('Approche une carte NFC du dos du téléphone.', 'ok');
+      reader.onreadingerror = function () { setStatus('Carte détectée mais illisible. Réessaie.', 'err'); };
+      reader.onreading = function (ev) {
+        var found = [];
+        for (var i = 0; i < ev.message.records.length; i++) {
+          var v = decode(ev.message.records[i]);
+          if (v) found.push(v);
+        }
+        var line = found.length ? found.join(' | ') : '(aucun enregistrement) ' + (ev.serialNumber || '');
+        if (seen[line]) { setStatus('Déjà scanné : ' + line, 'err'); beep(); return; }
+        seen[line] = 1;
+        items.push(line);
+        render();
+        beep();
+        setStatus('Ajouté : ' + line, 'ok');
+      };
+    } catch (e) {
+      ctrl = null;
+      setStatus("Impossible de lancer le scan : " + (e && e.message ? e.message : e) + ". Active le NFC du téléphone et ouvre la page directement dans Chrome.", 'err');
+    }
+  });
+
+  document.getElementById('copy').addEventListener('click', async function () {
+    var text = items.join('\n');
+    if (!text) { setStatus('Rien à copier.', 'err'); return; }
+    try { await navigator.clipboard.writeText(text); setStatus('Copié (' + items.length + ' lignes).', 'ok'); }
+    catch (e) { out.focus(); out.select(); setStatus('Sélectionné : fais « Copier » à la main.', 'err'); }
+  });
+
+  document.getElementById('clear').addEventListener('click', function () {
+    items = []; seen = {}; render(); setStatus('Liste vidée.');
+  });
+})();
+</script>
+</body>
+</html>
